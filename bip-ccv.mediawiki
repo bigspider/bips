@@ -1,0 +1,217 @@
+<pre>
+  BIP: TBD
+  Layer: Consensus (soft fork)
+  Title: OP_CHECKCONTRACTVERIFY
+  Author: Salvatore Ingala <salvatoshi@protonmail.com>
+  Comments-URI: https://github.com/bitcoin/bips/wiki/Comments:BIP-TBD
+  Status: Draft
+  Type: Standards Track
+  Created: TBD
+  License: BSD-3-Clause
+  Post-History: TBD
+</pre>
+
+
+== Introduction ==
+
+This BIP proposes a new tapscript opcode that add consensus support for a covenant: <code>OP_CHECKCONTRACTVERIFY</code> (<code>OP_CCV</code>).
+
+This opcode enables users to create UTXOs that carry (and can introspect) a commitment to a 32-byte hash.
+
+In conjunction with an opcode for **vector commitments**, this allows to create and compose arbitrary state machines that define the possible future outcomes of a UTXO. The validity of a state transition depend on the conditions that can be expressed in the program (Scripts in the taptree).
+
+=== Copyright ===
+
+This document is licensed under the 3-clause BSD license.
+
+=== Motivation ===
+
+The ability to to constrain the future of coins beyond what is possible with presigned transactions is at the core of numerous attempts to improve bitcoin. Some of the proposed applications include:
+
+* UTXO sharing schemes like TODO: (Ark, CoinPools, Timeout Trees, etc.) use various types of output restrictions in order to enable multiple parties to share the control of a UTXO, while ensuring that each participant controls their own balance.
+* Sidechains (for example: rollups) could be implemented via a UTXO encumbered with a recursive covenant, updating the sidechain state root every time it is spent.
+* <code>OP_VAULT</code> [[bip-0345.md|BIP-345]] utilizes similar principles of carrying data to the next output, and a 2-step withdrawal protocol that can easily be described as a state machine.
+
+Constructions like BitVM<ref>https://bitvm.org/</ref> try to side-step the lack of a primitive allowing UTXOs to carry state with a clever use of Lamport Signatures, and optimistic execution of smart contracts. This comes with an extremely high cost in term of complexity, interactivity, and (potentially) in block size occupation, for some of the possible execution paths. Moreover, the design of fully trustless bridges remains elusive.
+
+Rather than providing a construct optimized for a specific application, this BIP aims to provide a fundamental building block that is widely applicable, and common to many constructions.
+
+== Design ==
+
+We consider the **program** of a P2TR UTXO to be composed of an x-only public key (that we call the **naked key**), and a Merkle tree of Scripts. If there is no data committed in the UTXO, than the naked key is the internal key as defined in BIP-341.
+
+If the UTXO carries a commitment to a 32-byte hash (the **data**), then the naked key is tweaked with the data, and the resulting key is the internal key per BIP-341.
+
+This allows to embed a commitment to the data that can be validated during the Script execution, with an ad-hoc opcode called <code>OP_CHECKCONTRACTVERIFY</code>, while staying fully compatible with taproot. Notably:
+- the committed data does not make the UTXO any larger
+- the keypath spend, if desired, is still available
+- if multiple Scripts are in the taptree, only the ones that actually access the data have to pay the cost for it, via the witness stack.
+
+<code>OP_CHECKCONTRACTVERIFY</code> can be applied to introspect the program and data of one of the inputs of the transaction (typically, the current input, in order to access its committed data), or one of the outputs of the transaction (in order to define its program, and possibly its committed data).
+
+=== Output amounts ===
+
+Since the majority of use cases for output restrictions also require checking not just the program, but also the amount of the output, <code>OP_CHECKCONTRACTVERIFY</code> also includes by default an ergonomic semantic for checking the output amounts that allows each input to specify that its amount must flow towards certain outputs. In case multiple inputs desire their amount to go to the same outputs, the semantics guarantees that total amounts are preserved.
+
+This allows to support workflows that aggregate the amounts of multiple inputs, without requiring direct introspection or looping over the input/output amounts from within Script.
+
+== Specification ==
+
+The tapscript opcode <code>OP_SUCCESS187</code> (<code>0xbb</code>) is constrained with new rules to implement <code>OP_CHECKCONTRACTVERIFY</code>.
+
+When evaluating <code>OP_CHECKCONTRACTVERIFY</code> (<code>OP_SUCCESS187</code>,
+<code>0xbb</code>), the expected format of the stack, shown top to bottom, is:
+
+<source>
+<flags>
+<taptree>
+<pk>
+<index>
+<data>
+</source>
+
+where:
+
+* <code><flags></code> is a minimally encoded integer, according to one of the values defined below.
+* <code><taptree></code> is the Merkle root of the taproot tree, or a minimally encoded <code>-1</code>, or the empty buffer.
+* <code><pk></code> is called the **naked key**, and it's a valid 32-byte x-only public key, or a minimally encoded <code>-1</code>, or the empty buffer.
+* <code><index></code> is a minimally encoded -1, or a minimally encoded non-negative integer.
+* <code><data></code> is TODO
+
+In short, the semantics of the opcode with respect to the Script is as follows:
+
+   Verify that the input/output with the given index is a P2TR output where the public key is obtained from <code><pk></code>, tweaked with <data> (if present), then taptweaked with <code><taptree</code> (if present).
+
+In the following, the **current input** is the input whose Script is being executed.
+
+The following value of the flags are defined:
+* <code>CCV_FLAG_CHECK_INPUT = -1</code>: The opcode is checking the script of an input; no check on the amount is performed
+* <code>CCV_FLAG_CHECK_OUTPUT = 0</code>: The opcode is checking the script of an output; the current amount of the input must be preserved in the output.
+* <code>CCV_FLAG_IGNORE_OUTPUT_AMOUNT = 1</code>: The opcode is checking the script of an output; the amount of the output is ignored.
+* <code>CCV_FLAG_DEDUCT_OUTPUT_AMOUNT = 2</code>: The opcode is checking the script of an output; the amount of the output is deducted from the current amount of the current input.
+
+Any other value of the flags makes the opcode succeed validation immediately<ref>This allows to soft-fork future behavior by introducing new values for the flag. As the flags would always be hard-coded via a push in the Script, the risk of mistakes seems negligible.</ref>.
+
+If the <code><taptree></code> is -1, it is replaced with the Merkle root of the current input's tapscript tree. If the taptree is the empty buffer, then the taptweak is skipped. Any other value is invalid.
+
+If the <code><pk></code> is 0, it is replaced with it is replaced with the NUMS x-only pubkey <code>0x50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0</code> defined in BIP-0340. If the <code><pk></code> is -1, it is replaced with the taproot internal key of the current input. Any other value is invalid.
+
+If the <code><index></code> is -1, it is replaced with the index of the current input.
+
+If the <code><data></code> is the empty buffer, then there is no data tweak for the input/output being checked.
+
+=== <code>OP_CHECKCONTRACTVERIFY</code> evaluation ===
+
+The specification is divided in three parts: the initialization is performed before any of the transaction inputs are evaluated.
+
+The evaluation is executed any time the opcode is encountered in a Script while evaluating an input.
+
+The deferred checks are executed after all the inputs have been evaluated as valid.
+
+=== Deferred check initialization ===
+
+<source lang="python">
+  for out_index in range(n_outputs)
+    out_min_amount[out_index] = 0
+</source>
+=== `OP_CHECKCONTRACTVERIFY` evaluation ===
+
+<source lang="python">
+  if flags < CCV_FLAG_CHECK_INPUT or flags > CCV_FLAG_DEDUCT_OUTPUT_AMOUNT:
+    return success()  # undefined flags are OP_SUCCESS
+
+  if index == -1:
+    index = current_input_index
+
+  if flags == CCV_FLAG_CHECK_INPUT:
+    if index < 0 or index >= n_inputs:
+      return fail()
+
+    target = inputs[index].scriptPubKey
+  else:
+    if index < 0 or index >= n_outputs:
+      return fail()
+
+    target = outputs[index].scriptPubKey
+
+  if taptree == <-1>:
+    taptree = current_input_taptree
+
+  if pk == <0>:
+    result = BIP340_NUMS_KEY
+  elif pk == <-1>:
+    result = current_input_internal_key 
+  elif len(pk) == 32:
+    result = pk
+  else:
+    return fail()
+
+  if data != <0>:
+    if len(data) != 32:
+      return fail()
+
+    result = tweak(result, data)
+
+  if len(taptree) != 0:
+    if len(taptree) != 32:
+      return fail()
+
+    result = taptweak(result, taptree)
+
+  if target != P2TR(result)
+    return fail()
+
+  if flags == 0:
+    out_min_amount[index] += inputs[current_input_index].amount
+  elif flags == CCV_FLAG_DEDUCT_OUTPUT_AMOUNT:
+    if inputs[current_input_index].amount > outputs[index].amount:
+      return fail()
+    inputs[current_input_index].amount -= outputs[index].amount
+
+  stack.pop(5)  # drop all 5 stack elements
+</source>
+
+=== Deferred checks ===
+
+<source lang="python">
+ for out_index in range(n_outputs):
+    if outputs[out_index].amount < out_min_amount[out_index]:
+      return fail()
+
+  # TODO: check that no output that is used with CCV_FLAG_DEDUCT_OUTPUT_AMOUNT
+  # is also used with another OP_CHECKCONTRACTVERIFY, unless it's with CCV_FLAG_IGNORE_OUTPUT_AMOUNT
+</source>
+
+== Policy changes ==
+
+TODO
+
+== Implementation ==
+
+TODO
+
+== Applications ==
+
+TODO
+
+== Deployment ==
+
+The activation mechanism, and the set of other BIPs to be concurrently deployed, are to be determined.
+
+== Backwards compatibility ==
+
+<code>OP_CHECKCONTRACTVERIFY</code> replaces the witness v1-only opcode OP_SUCCESS187 with stricter verification semantics. Consequently, scripts using those opcodes which previously were valid will cease to be valid with this change.
+
+Stricter verification semantics for an OP_SUCCESSx opcode are a soft fork, so existing software will be fully functional without upgrade except for mining and block validation.
+
+== Footnotes ==
+
+<references />
+
+== References ==
+
+TODO
+
+== Acknowledgements ==
+
+TODO

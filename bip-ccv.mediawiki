@@ -190,6 +190,88 @@ TODO
 
 TODO
 
+== Examples ==
+
+This section documents some common Script fragments that use <code>OP_CHECKCONTRACTVERIFY</code> for various common choices of the parameters.
+
+=== Check that some data is embedded in the current input ===
+
+This is used to check data that was typically committed to in an output from a covenant-encumbered spend that produced the current input.
+
+<source>
+<data=data>
+<index=-1>
+<pk=naked_pk>
+<taptree=-1>
+<flags=-1 (CCV_FLAG_CHECK_INPUT)>
+OP_CHECKCONTRACTVERIFY
+</source>
+
+=== Check that some other input with index <code>in_i</code> is a specific contract with embedded data ===
+
+This allows to "read" the data of another input.
+
+<source>
+<data=input_data>
+<index=in_i>
+<pk=input_i_naked_pk>
+<taptree=input_taptree>
+<flags=-1 (CCV_FLAG_CHECK_INPUT)>
+OP_CHECKCONTRACTVERIFY
+</source>
+
+=== Check that a certain output with index <code>out_i</code> is a certain contract with specified data, preserving input amount ===
+
+This might be used for a 1-to-1 or many-to-1 covenant-encumbered spend: one or several inputs are spent to an output with certain code and data.
+
+<source>
+<data=data>
+<index=out_i>
+<pk=output_naked_pk>
+<taptree=output_taptree>
+<flags=0>
+OP_CHECKCONTRACTVERIFY
+</source>
+
+=== Check that a certain output with index <code>out_i</code> is a a P2TR with a pubkey <code>output_pk</code>, preserving amount ===
+
+A simpler case where we just want the output to be a certain P2TR output, without any embedded data.
+
+<source>
+<data=<>>
+<index=out_i>
+<pk=output_pk>
+<taptree=<>>
+<flags=0>
+OP_CHECKCONTRACTVERIFY
+</source>
+
+=== Check that a certain output with index <code>out_i</code> is a certain contract with specified data; don't check amount ===
+
+This could be used to check _data_ and _program_ of an output, but not its amount (which might be either irrelevant, or is checked via a different introspection opcode.
+
+<source>
+<data=data>
+<index=out_i>
+<pk=output_naked_pk>
+<taptree=output_taptree>
+<flags=CCV_FLAG_IGNORE_OUTPUT_AMOUNT>
+OP_CHECKCONTRACTVERIFY
+</source>
+
+=== Check that the input is sent exactly to the same scriptPubKey ===
+This requires that the output with the same index as the current input is exactly the same script, and with the same amount.
+
+<source>
+<data=<>>
+<index=-1>
+<pk=-1>
+<taptree=-1>
+<flags=0>
+OP_CHECKCONTRACTVERIFY
+</source>
+
+
 == Applications ==
 
 TODO
